@@ -340,6 +340,7 @@ function LigatingAtoms() {
 
   local cutoff=2.5       # distancia de corte en Å
   echo -e "Obtaining ligating atoms..."
+  
   if [[ -f "LIGATING_ATOMS.txt" ]]; then
     rm "LIGATING_ATOMS.txt"
   fi
@@ -446,7 +447,6 @@ PrepareOrganicFragment "${LIG_RESNAME}.pdb"
 
 # Merge metal.pdb and lig.pdb keeping original atomID.
 cat ${METAL}.pdb ${LIG_RESNAME}.pdb | sort -k2,2n > ${INPUT_FILENAME}_prep.pdb
-
 
 LigatingAtoms ${INPUT_FILENAME}_prep.pdb ${METAL_ATOM_ID}
 CheckFiles "PAIRS.txt"
