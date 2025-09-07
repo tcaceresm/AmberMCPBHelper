@@ -8,7 +8,7 @@
 
 function ScriptInfo() {
   DATE="2025"
-  VERSION="0.0.1"
+  VERSION="0.0.2"
   GH_URL="https://github.com/tcaceresm/AmberMCPBHelper"
 
   cat <<EOF
@@ -25,7 +25,10 @@ EOF
 Help() {
   ScriptInfo
   echo -e "\nUsage: bash prepare4mcpb.sh OPTIONS\n"
-  echo "This script parse files for MCPB.py."
+  echo "This script prepare input files for MCPB.py."
+  echo "This include:"
+  echo -e "  Atom renumbering, set resname, separating metal from organic fragment, etc.\n"
+  echo -e "ATTENTION: This script supports only a metallorganic compound containing 1 metal.\n"
 
   echo "Required options:"
   echo " -d, --work_dir         <path>       Working directory. Inside this directory, a folder named setupMD will be created which contains all necessary files."
@@ -63,7 +66,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
   '-d' | '--work_dir'        ) shift ; WDPATH=$1 ;;
   '--input_file' | '-i'      ) shift ; INPUT_FILE=$1 ;;
-  '--metal_name'             ) shift ; METAL=$1 ;;
+  '--metal_name'             ) shift ; METAL=${1^^} ;;
   '--metal_charge'           ) shift ; METAL_CHARGE=$1 ;;
   '--lig_charge'             ) shift ; LIG_CHARGE=$1 ;;
   '--lig_mult'               ) shift ; LIG_MULT=$1 ;;
@@ -76,7 +79,6 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
-
 
 #### Functions ####
 
@@ -103,18 +105,13 @@ function CheckFiles() {
 function CheckVariable() {
   # Check if variable is not empty
   for ARG in "$@"; do
-    if [[ -z ${ARG} ]]; then
-      echo "Error: Required option not provided."
+    if [[ -z "${ARG// /}" ]]; then
+      echo "Error: Required option not provided or empty."
       echo "Use --help option to check available options."
       exit 1
   fi
   done
 }
-
-CheckVariable "${WDPATH}" "${INPUT_FILE}" "${METAL}" \
-              "${METAL_CHARGE}" "${LIG_RESNAME}" "${LIG_CHARGE}" \
-              "${LIG_MULT}" "${LIG_FF}"
-
 
 function XYZ_2_PDB() {
   # XYZ to PDB format using OpenBabel
@@ -144,39 +141,6 @@ function CleanPDB() {
   echo -e "Done.\n"
 }
 
-#function AssignUniqueAtomsName() {
-  # Each atom inside a residue must be unique labeled, i.e, atom names must be uniques inside a residue.
-  # Input is PDB file.
-  # local input_file=$1
-
-  # CheckFiles "${input_file}"
-
-  # input_filename=$(basename ${input_file} .pdb)
-
-  # echo "Assigning unique atoms name..."
-  # awk '
-  #   BEGIN {
-  #   metals["FE"]
-  #   metals["RE"]
-  #   metals["RU"]
-  #   metals["ZN"]
-  # } {
-  #     elem = toupper(substr($0,13,3))                                 # atom name (col 13-16) https://www.cgl.ucsf.edu/chimera/docs/UsersGuide/tutorials/pdbintro.html
-  #     gsub(/ /,"",elem)
-  #     if ( !(elem in metals) ) {
-  #       count[elem]++                                               # associative arrays awk
-  #       newname = elem count[elem]                                  # ej: C1, H1, FE1
-  #       $0 = substr($0,1,12) sprintf("%-4s", newname) substr($0,17) # substr(string, start, length)
-  #     } else {
-  #       $0 = substr($0,1,12) sprintf("%-4s", elem) substr($0,17) # substr(string, start, length)  
-  #     } 
-  #     print
-  # }
-  # ' "${input_file}" > "${input_filename}_renamed.pdb" || { echo "Error during AssignUniqueAtomsName()." ; exit 1; }
-  # echo "Done"
-
-#}
-
 function AssignUniqueAtomsName() {
   # Each atom inside a residue must be unique labeled, i.e, atom names must be uniques inside a residue.
   # Input is PDB file.
@@ -188,22 +152,36 @@ function AssignUniqueAtomsName() {
 
   echo "Assigning unique atoms name..."
 
-  awk -v metal="${METAL}" '
+  awk -v metal="${METAL[@]}" -v input=${input_file} '
+    BEGIN {
+      metals["FE"]; metals["CO"]; metals["NI"]; metals["CU"];
+      metals["ZN"]; metals["RU"]; metals["RO"]; metals["PD"];
+      metals["AG"]; metals["CD"]; metals["RE"]; metals["OS"]; 
+      metals["PT"]; metals["AU"];
+    } 
     {
-      elem = toupper(substr($0,13,3))     # atom name (col 13-16)
-      gsub(/ /,"",elem)                   # eliminar espacios
+      elem = toupper(substr($0,13,3))      # atom name (col 13-16)
+      gsub(/ /,"",elem)                    # remove spaces
 
-      if (elem != metal) {
-        count[elem]++                      # contador para nombres únicos
+      if (!(elem in metals)) {                 # associative arrays awk
+        count[elem]++                      # counter for unique names
         newname = elem count[elem]         # ej: C1, H1, FE1
-        $0 = substr($0,1,12) sprintf("%-4s", newname) substr($0,17)
+        $0 = substr($0,1,12) sprintf("%-4s", newname) substr($0,17) # substr(string, start, length)
       } else {
-        $0 = substr($0,1,12) sprintf("%-4s", elem) substr($0,17)
+        metal_count++
+        $0 = substr($0,1,12) sprintf("%-4s", elem) substr($0,17)    # substr(string, start, length)
       }
       print
     }
+          
+    END {
+      if (metal_count != 1) {
+        print "Error: Found " metal_count " metals in " input ". Need only 1 metal." > "/dev/stderr"
+        exit 1
+        }
+    }
   
-  ' "${input_file}" > "${input_filename}_renamed.pdb" || { echo "Error during AssignUniqueAtomsName()." ; exit 1; }
+  ' "${input_file}" > "${input_filename}_renamed.pdb" || { echo "Error during AssignUniqueAtomsName(). Exiting." ; exit 1; }
   
   echo -e "Done.\n"
 
@@ -240,8 +218,8 @@ function ExtractMetal() {
     }
   ' "${input_file}" || { echo "Error during extracting metal from pdb."; exit 1; }
 
-  # Global variable. Metal resnumber from initial complex.
-  METAL_RESNUMBER=$(awk '{print $5}' ${output_filename})
+  # Global variable. From initial complex.
+  
   METAL_ATOM_ID=$(awk '{print $2}' ${output_filename})
 
   echo "Renaming resname of created metal pdb."
@@ -250,14 +228,21 @@ function ExtractMetal() {
   sed -i "s/${metal_resname}/${METAL} /g" ${output_filename}
   echo "Created file: ${output_filename}"
 
-  echo "Renumbering metal residue number --> hardcoded to be 1."
+  echo "Renumbering metal residue number."
   awk '
     {
-    $0 = substr($0,1,22) sprintf("%4d", 1) substr($0,27)
+    atom_id = substr($0, 7, 5) + 0
+    if (atom_id > 1)
+      resid = 2
+    else
+      resid = 1
+    $0 = substr($0,1,22) sprintf("%4d", resid) substr($0,27)
     print
     }' ${METAL}.pdb > ${METAL}.pdb.tmp \
   && mv ${METAL}.pdb.tmp ${METAL}.pdb || { echo "Error renumbering metal fragment."; exit 1; }
   echo "Done renumbering."
+
+  METAL_RESNUMBER=$(awk '{print $5}' ${output_filename}) # for later use
 
   echo -e "Done.\n"
 
@@ -287,10 +272,14 @@ function ExtractOrganicFragment() {
 
   echo "Created file: ${LIG_RESNAME}.pdb"
   
-  echo "Renumbering ligand residue --> hardcoded to be 2."
-  awk '
+  echo "Renumbering ligand residue."
+  awk -v metal_resnumber=${METAL_RESNUMBER} '
     {
-    $0 = substr($0,1,22) sprintf("%4d", 2) substr($0,27)
+    if (metal_resnumber == 1)
+      lig_resnumber = 2
+    else
+      lig_resnumber = 1
+    $0 = substr($0,1,22) sprintf("%4d", lig_resnumber) substr($0,27)
     print
     }' ${LIG_RESNAME}.pdb > ${LIG_RESNAME}.pdb.tmp \
   && mv ${LIG_RESNAME}.pdb.tmp ${LIG_RESNAME}.pdb || { echo "Error renumbering organic fragment."; exit 1; }
@@ -428,6 +417,11 @@ EOF
 
 
 #### Main ####
+CheckVariable "${WDPATH}" "${INPUT_FILE}" "${METAL}" \
+              "${METAL_CHARGE}" "${LIG_RESNAME}" "${LIG_CHARGE}" \
+              "${LIG_MULT}" "${LIG_FF}"
+
+CheckFiles ${INPUT_FILE}
 
 INPUT_FILENAME=$(basename ${INPUT_FILE} .xyz)
 
